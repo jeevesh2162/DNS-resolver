@@ -1,0 +1,5 @@
+obj/
+*.exe
+dns_resolver
+daemon.log
+resolver.pid
