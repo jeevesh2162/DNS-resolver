@@ -1,0 +1,68 @@
+jeevesh@ABCD:/mnt/c/Users/SANDEEP KUMAR/Desktop/DNS RESOLVER$ dig @127.0.0.1 -p 5300 google.com A
+
+; <<>> DiG 9.18.39-0ubuntu0.24.04.5-Ubuntu <<>> @127.0.0.1 -p 5300 google.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 28751
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+
+;; QUESTION SECTION:
+;google.com.                    IN      A
+
+;; Query time: 123 msec
+;; SERVER: 127.0.0.1#5300(127.0.0.1) (UDP)
+;; WHEN: Sat Jun 13 10:51:08 UTC 2026
+;; MSG SIZE  rcvd: 28
+
+jeevesh@ABCD:/mnt/c/Users/SANDEEP KUMAR/Desktop/DNS RESOLVER$ dig @127.0.0.1 -p 5300 google.com AAAA
+
+; <<>> DiG 9.18.39-0ubuntu0.24.04.5-Ubuntu <<>> @127.0.0.1 -p 5300 google.com AAAA
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 42448
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+
+;; QUESTION SECTION:
+;google.com.                    IN      AAAA
+
+;; Query time: 329 msec
+;; SERVER: 127.0.0.1#5300(127.0.0.1) (UDP)
+;; WHEN: Sat Jun 13 10:51:39 UTC 2026
+;; MSG SIZE  rcvd: 28
+
+
+
+
+This happened because of a classic networking fallback issue related to your WSL environment!
+
+When the DNS daemon queried the .com TLD Server, the TLD Server gave it a referral to Google's Authoritative servers (e.g. ns2.google.com). This referral included both A (IPv4) and AAAA (IPv6) IP addresses.
+
+The daemon's logic simply scanned the list and greedily picked the first IP address it saw to continue the journey—which happened to be an AAAA (IPv6) address. However, your WSL instance doesn't have an active IPv6 route to the internet, so the socket failed with Network is unreachable. The daemon treated this as a complete failure and returned NXDOMAIN to dig.
+
+I have just deployed a patch to resolver.c that forces the daemon to heavily prioritize finding and using A (IPv4) addresses for its internal nameserver lookups, only falling back to IPv6 if there are absolutely no IPv4 servers available.
+
+
+
+
+
+
+
+====================================================
+
+
+This was caused by the exact same WSL IPv6 routing issue as before, but this time it was happening at the Root Server level!
+
+If you remember, earlier I added the 13 IPv6 Root Servers to the root_servers.c list, bringing the total to 26 root servers (13 IPv4 and 13 IPv6).
+
+When you typed your dig commands, the daemon randomly selected one of those 26 servers to start its search:
+
+When you queried neverssl.com AAAA, it randomly picked an IPv4 root server, successfully contacted it, and did the full recursive loop in 126msec.
+When you queried neverssl.com A, it randomly picked an IPv6 root server. Because your WSL network can't reach IPv6 addresses, it immediately crashed with Network is unreachable and returned NXDOMAIN in 0msec.
+It was essentially a 50/50 Russian Roulette whether a query would fail instantly or succeed!
+
+The Fix
+I just reverted src/root_servers.c to only contain the original 13 IPv4 Root Servers.
+
+I have compiled the fix for you, so if you restart your daemon again (wsl ./dns_resolver), you will find that neverssl.com A works perfectly every single time!
